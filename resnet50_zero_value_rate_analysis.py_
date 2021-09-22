@@ -1,0 +1,62 @@
+import onnx
+import onnxruntime
+import numpy as np
+from PIL import Image
+
+model = onnx.load("resnet50.onnx")
+onnx.checker.check_model(model)
+print("Resnet50 onnx model has loaded successful!")
+model = onnx.shape_inference.infer_shapes(model)
+
+relu_tensor = []
+for node in model.graph.node:
+  if node.op_type == "Relu":
+    relu_tensor.append(node.output[0])
+
+count = 0
+model.graph.output.pop() # 不统计output tensor
+for value_info in model.graph.value_info:
+  if value_info.name in relu_tensor:
+    count += 1
+    dim_shape = [item.dim_value for item in value_info.type.tensor_type.shape.dim]
+    output_layer_value_info= onnx.helper.make_tensor_value_info(value_info.name, 1, dim_shape)
+    model.graph.output.append(output_layer_value_info)
+    # print(value_info)
+
+assert(len(model.graph.output) == 49)
+onnx.save(model, "resnet50_infer.onnx")
+
+session = onnxruntime.InferenceSession("resnet50_infer.onnx")
+
+# image pre-processor
+img = Image.open("Onnx_process/dog.jpg")
+img = img.resize((224, 224))
+img = np.array(img, dtype = np.float32)
+mean = [0.485, 0.456, 0.406]
+std = [0.229, 0.224, 0.225]
+mean = np.array(mean).reshape((1, 1, -1))
+std = np.array(std).reshape((1, 1, -1))
+img = (img / 255.0 - mean) / std
+img = np.transpose(img, [2, 0, 1]).astype(np.float32)
+
+# append to list and get the name
+data = []
+data.append(img)
+input_name_1 = session.get_inputs()[0].name
+# data = np.ones((1,32,64,64), dtype=np.float32) # use random data instead
+
+print(img.shape)
+
+outputs = session.run([],{input_name_1:data})
+
+value_nozero_count = 0
+value_count = 0
+for output in outputs:
+  value_count += output.size
+  value_nozero_count += np.count_nonzero(output)
+
+# print(outputs[0].shape)
+# print(outputs[0].argmax()) # get the output result
+
+print("relu 激活之后 0 值的比率为：", 1 - value_nozero_count/value_count)
+
